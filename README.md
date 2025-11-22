@@ -10,3 +10,4 @@ Mooltipass is a personal project meant to solve the problem of scaffolding every
 - DB setup 
 - build and release 
 - standardized dev experience 
+ 
