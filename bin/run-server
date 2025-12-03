@@ -1,0 +1,13 @@
+#!/bin/bash
+
+set -e 
+
+if test -f ".env"; then
+  set -a; source .env; set +a 
+else 
+  echo "Please create .env file following .env.example"
+  exit 1
+fi
+
+go build -o build/mooltipass $(pwd)/cmd/mooltipass 
+build/mooltipass
