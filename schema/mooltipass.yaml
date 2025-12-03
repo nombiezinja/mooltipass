@@ -1,0 +1,212 @@
+# TODO add naming conventions and guide lines
+openapi: 3.0.3
+info:
+  title: Mooltipass API
+  version: 1.0.0
+  description: |
+    Mooltipass is a platform-ready Go service scaffold.
+    Features: Authn, Authz, OpenAPI, oapi-codegen, observability, DB setup, build/release, standardized dev experience.
+  license:
+    name: MIT
+
+servers:
+  - description: Development
+    url: "{protocol}://{hostname}:{port}/v1"
+    variables:
+      protocol:
+        enum: [http, https]
+        default: http
+      hostname:
+        default: localhost
+      port:
+        default: "8000"
+
+security:
+  - BearerAuth: []
+
+paths:
+  # Health & System
+  "/health":
+    get:
+      operationId: HealthCheck
+      summary: Health check endpoint
+      security: []
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  "/favicon.ico":
+    get:
+      operationId: GetFavicon
+      security: []
+      responses:
+        "200":
+          description: Favicon
+        "404":
+          description: Not found
+
+  # Authentication & Registration
+  "/auth/register":
+    post:
+      operationId: Register
+      summary: Register new user with invite code
+      description: Create new user account using a valid invitation token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        "201":
+          description: User successfully registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          description: Invalid or expired invitation token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  "/auth/login":
+    post:
+      operationId: Login
+      summary: Authenticate user credentials
+      description: Standard email/password login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    BadRequest:
+      description: (400) Invalid request parameters or malformed data
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Unauthorized:
+      description: (401) Authentication required or invalid credentials
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalServerError:
+      description: (500) Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: Error code
+            message:
+              type: string
+              description: Error message
+
+    HealthResponse:
+      type: object
+      required: [status, timestamp]
+      properties:
+        status:
+          type: string
+          enum: [healthy, degraded, unhealthy]
+        timestamp:
+          type: string
+          format: date-time
+
+    RegisterRequest:
+      type: object
+      required: [email, password, invitation_token]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+        invitation_token:
+          type: string
+          minLength: 32
+          maxLength: 64
+
+    RegisterResponse:
+      type: object
+      required: [user_id, email, created_at]
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+          format: email
+        created_at:
+          type: string
+          format: date-time
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+
+    LoginResponse:
+      type: object
+      required: [access_token, token_type, user_id]
+      properties:
+        access_token:
+          type: string
+        token_type:
+          type: string
+          default: "Bearer"
+        user_id:
+          type: string

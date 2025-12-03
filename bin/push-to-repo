@@ -1,0 +1,99 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+IFS=$'\n\t'
+
+# Usage:
+#   ./push-to-repo <release_dir> [repo_spec_or_slug] [branch] [ssh_alias]
+#   - repo_spec_or_slug: "OWNER/REPO" or full SSH URL like git@github.com:OWNER/REPO.git
+#   - ssh_alias: name of Host in ~/.ssh/config (e.g., github-public)
+RELEASE_DIR_INPUT="${1:?Usage: $0 <release_dir> [repo_spec_or_slug] [branch] [ssh_alias]}"
+REPO_SPEC_OR_SLUG="${2}"
+TARGET_BRANCH="${3}"
+SSH_ALIAS="${4}"
+GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-mooltipass-release-bot@local}"
+GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-mooltipass-release-bot}"
+
+# Canonicalize release dir to an absolute path
+if ! RELEASE_DIR="$(cd "$RELEASE_DIR_INPUT" 2>/dev/null && pwd -P)"; then
+  echo "ERR: release dir '$RELEASE_DIR_INPUT' not found" >&2; exit 1
+fi
+command -v git >/dev/null || { echo "ERR: git not found" >&2; exit 1; }
+
+# Prefer per-alias ssh config; caller can still override via GIT_SSH_COMMAND if desired
+: "${GIT_SSH_COMMAND:=ssh -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new}"
+
+# Build remote spec from slug or accept as-is if full ssh url
+make_remote_spec() {
+  local spec="$1"
+  if [[ "$spec" =~ ^ssh:// ]] || [[ "$spec" =~ ^[^@]+@[^:]+: ]]; then
+    printf '%s\n' "$spec"
+  elif [[ "$spec" =~ ^[^/[:space:]]+/[^/[:space:]]+(\.git)?$ ]]; then
+    spec="${spec%.git}.git"
+    printf '%s:%s\n' "$SSH_ALIAS" "$spec"
+  else
+    echo "ERR: Unrecognized repo spec '$spec' (use OWNER/REPO or full SSH URL)" >&2
+    exit 2
+  fi
+}
+REMOTE_SPEC="$(make_remote_spec "$REPO_SPEC_OR_SLUG")"
+
+# Temp clone
+TMP_DIR="$(mktemp -d -p "${TMPDIR:-$PWD}" artifacts.XXXXXX)"
+cleanup() { rm -rf -- "$TMP_DIR"; }
+trap cleanup EXIT
+
+echo "Publishing '$RELEASE_DIR' → '$REMOTE_SPEC' (branch '$TARGET_BRANCH') via '$TMP_DIR'"
+git -c core.sshCommand="$GIT_SSH_COMMAND" clone --depth=1 "$REMOTE_SPEC" "$TMP_DIR"
+cd "$TMP_DIR"
+
+# Switch/create target branch
+if git show-ref --verify --quiet "refs/remotes/origin/$TARGET_BRANCH"; then
+  git switch --quiet --track "origin/$TARGET_BRANCH"
+elif git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
+  git switch --quiet "$TARGET_BRANCH"
+else
+  git switch --quiet --orphan "$TARGET_BRANCH"
+  find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf -- {} +
+fi
+
+# Which top-level files to keep in the target branch
+# Caller can override: export PRESERVE_FILES="CNAME .nojekyll .env"
+read -r -a PRESERVE_FILES <<< "${PRESERVE_FILES:-.env}"
+
+# Build a safe find(1) argument list: delete everything at top level
+# except .git and the preserved names
+preserve=(.git "${PRESERVE_FILES[@]}")
+find_args=( . -mindepth 1 -maxdepth 1 '(' )
+for i in "${!preserve[@]}"; do
+  find_args+=( -name "${preserve[i]}" )
+  # add -o between -name terms except after the last one
+  if (( i < ${#preserve[@]} - 1 )); then
+    find_args+=( -o )
+  fi
+done
+find_args+=( ')' -prune -o -exec rm -rf -- '{}' + )
+
+# Execute the deletion
+find "${find_args[@]}"
+
+# Copy top-level entries from $RELEASE_DIR into current dir
+# Includes dotfiles; skips obvious sensitive/nested-repo paths
+find "$RELEASE_DIR" -mindepth 1 -maxdepth 1 \
+  \( -name '.git' -o -name '.ssh' -o -name '.env' \
+     -o -name '*id_rsa*' -o -name '*id_ed25519*' -o -name '*.pem' -o -name 'push-to-repo' \) -prune -o \
+  -exec cp -a -- {} . \;
+
+# Identity & commit
+git config user.name  "${GIT_AUTHOR_NAME}"
+git config user.email "${GIT_AUTHOR_EMAIL}"
+
+if [[ -z "$(git status --porcelain)" ]]; then
+  echo "No changes to publish."
+  exit 0
+fi
+
+git add -A
+git commit -m "Publish artifacts: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+git -c core.sshCommand="$GIT_SSH_COMMAND" push origin "HEAD:$TARGET_BRANCH"
+
+echo "Artifacts published to $REPO_SPEC_OR_SLUG ($TARGET_BRANCH)."

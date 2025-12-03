@@ -1,0 +1,15 @@
+#!/bin/bash
+
+set -e
+
+echo "Installing go oapi-codegen"
+
+go get -tool github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@latest
+
+echo "Generating server..."
+
+go tool oapi-codegen --package generatedserver -generate chi-server,types -old-config-style schema/mooltipass.yaml > internal/generatedserver/mooltipass.gen.go
+
+gofmt -l -w $PWD/service
+
+echo "Done - check out /internal/generatedserver/mooltipass.gen.go for newly generated server and types."
