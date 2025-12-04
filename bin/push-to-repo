@@ -3,15 +3,17 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 
 # Usage:
-#   ./push-to-repo <release_dir> [repo_spec_or_slug] [branch] [ssh_alias]
+#   ./push-to-repo <release_dir> [repo_spec_or_slug] [branch] [ssh_alias] [author_email] [author_name]
 #   - repo_spec_or_slug: "OWNER/REPO" or full SSH URL like git@github.com:OWNER/REPO.git
 #   - ssh_alias: name of Host in ~/.ssh/config (e.g., github-public)
-RELEASE_DIR_INPUT="${1:?Usage: $0 <release_dir> [repo_spec_or_slug] [branch] [ssh_alias]}"
+#   - branch: target branch to push to (default: main or default branch of remote)
+#   - author_email/author_name: git commit identity (default: release-bot@local / release-bot)
+RELEASE_DIR_INPUT="${1:?Usage: $0 <release_dir> [repo_spec_or_slug] [branch] [ssh_alias] [author_email] [author_name]}"
 REPO_SPEC_OR_SLUG="${2}"
 TARGET_BRANCH="${3}"
 SSH_ALIAS="${4}"
-GIT_AUTHOR_EMAIL="${GIT_AUTHOR_EMAIL:-mooltipass-release-bot@local}"
-GIT_AUTHOR_NAME="${GIT_AUTHOR_NAME:-mooltipass-release-bot}"
+GIT_AUTHOR_EMAIL="${5:-${GIT_AUTHOR_EMAIL:-release-bot@local}}"
+GIT_AUTHOR_NAME="${6:-${GIT_AUTHOR_NAME:-release-bot}}"
 
 # Canonicalize release dir to an absolute path
 if ! RELEASE_DIR="$(cd "$RELEASE_DIR_INPUT" 2>/dev/null && pwd -P)"; then
@@ -28,6 +30,7 @@ make_remote_spec() {
   if [[ "$spec" =~ ^ssh:// ]] || [[ "$spec" =~ ^[^@]+@[^:]+: ]]; then
     printf '%s\n' "$spec"
   elif [[ "$spec" =~ ^[^/[:space:]]+/[^/[:space:]]+(\.git)?$ ]]; then
+    [[ -n "$SSH_ALIAS" ]] || { echo "ERR: SSH alias required when using OWNER/REPO slug" >&2; exit 2; }
     spec="${spec%.git}.git"
     printf '%s:%s\n' "$SSH_ALIAS" "$spec"
   else
@@ -47,13 +50,18 @@ git -c core.sshCommand="$GIT_SSH_COMMAND" clone --depth=1 "$REMOTE_SPEC" "$TMP_D
 cd "$TMP_DIR"
 
 # Switch/create target branch
+DEFAULT_REMOTE_BRANCH="$(git remote show origin | sed -n 's/.*HEAD branch: //p')"
+DEFAULT_REMOTE_BRANCH="${DEFAULT_REMOTE_BRANCH:-main}"
+
+# Optionally ensure we have the remote ref (cheap, deterministic):
+git fetch -q origin "refs/heads/$TARGET_BRANCH:refs/remotes/origin/$TARGET_BRANCH" || true
+
 if git show-ref --verify --quiet "refs/remotes/origin/$TARGET_BRANCH"; then
-  git switch --quiet --track "origin/$TARGET_BRANCH"
+  git switch -q --track "origin/$TARGET_BRANCH"
 elif git show-ref --verify --quiet "refs/heads/$TARGET_BRANCH"; then
-  git switch --quiet "$TARGET_BRANCH"
+  git switch -q "$TARGET_BRANCH"
 else
-  git switch --quiet --orphan "$TARGET_BRANCH"
-  find . -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf -- {} +
+  git switch -q -c "$TARGET_BRANCH" "origin/$DEFAULT_REMOTE_BRANCH"
 fi
 
 # Which top-level files to keep in the target branch
@@ -97,3 +105,4 @@ git commit -m "Publish artifacts: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 git -c core.sshCommand="$GIT_SSH_COMMAND" push origin "HEAD:$TARGET_BRANCH"
 
 echo "Artifacts published to $REPO_SPEC_OR_SLUG ($TARGET_BRANCH)."
+exit 0
